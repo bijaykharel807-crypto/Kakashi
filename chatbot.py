@@ -26,7 +26,6 @@ import time
 import json
 import hashlib
 import logging
-import ollama
 from datetime import datetime
 from io import BytesIO
 from typing import List, Dict, Generator, Tuple, Optional
