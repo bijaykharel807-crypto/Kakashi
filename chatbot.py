@@ -26,6 +26,7 @@ import time
 import json
 import hashlib
 import logging
+
 from datetime import datetime
 from io import BytesIO
 from typing import List, Dict, Generator, Tuple, Optional
@@ -39,7 +40,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # Initialize clients based on provider
 if AI_PROVIDER == "ollama":
-    
+    import ollama
     MODEL = os.getenv("OLLAMA_MODEL", "phi3")
 elif AI_PROVIDER == "openai":
     import openai
