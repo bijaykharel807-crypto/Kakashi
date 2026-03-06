@@ -154,7 +154,7 @@ def generate_ollama(messages: List[Dict]) -> Generator[str, None, None]:
     """Yields tokens from Ollama."""
     try:
         stream = ollama.chat(
-            model=phip3,
+            model="phi3",
             messages=messages,
             stream=True,
             options={"num_predict": 150, "temperature": 0.3}
