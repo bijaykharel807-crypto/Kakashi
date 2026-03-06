@@ -15,7 +15,7 @@ A single‑file Streamlit application that integrates:
 - Extensive logging and error handling
 
 All in one file – no external HTML/CSS needed.
-Run with: streamlit run main.py
+Run with: streamlit run chatbot.py
 ================================================================================
 """
 
@@ -25,8 +25,6 @@ import time
 import json
 import hashlib
 import logging
-from pathlib import Path
-import pandas as pd
 
 from datetime import datetime
 from io import BytesIO
@@ -46,8 +44,6 @@ if "last_message_id" not in st.session_state:
     st.session_state.last_message_id = 0
 if "ai_provider" not in st.session_state:
     st.session_state.ai_provider = os.getenv("AI_PROVIDER", "ollama").lower()
-if "df" not in st.session_state:
-    st.session_state.df = None
 
 # -------------------- 2. AI PROVIDER SETUP --------------------
 AI_PROVIDER = st.session_state.ai_provider
@@ -119,32 +115,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# -------------------- 6. DATA LOADING SECTION --------------------
-# Load a local CSV file if it exists
-current_dir = Path(__file__).parent
-data_file = current_dir / "data.csv"
-if data_file.exists():
-    st.session_state.df = pd.read_csv(data_file)
-    st.sidebar.success(f"✅ Loaded {len(st.session_state.df)} rows from data.csv")
-else:
-    st.session_state.df = None
-    st.sidebar.info("📁 Place data.csv in app directory for auto-loading")
-
-# Optional file uploader in sidebar
-with st.sidebar:
-    st.subheader("📤 Upload Data")
-    uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
-    if uploaded_file:
-        st.session_state.df = pd.read_csv(uploaded_file)
-        st.success(f"✅ Uploaded {len(st.session_state.df)} rows")
-        
-    # Show data preview if available
-    if st.session_state.df is not None:
-        st.subheader("📊 Data Preview")
-        st.dataframe(st.session_state.df.head(3))
-        st.caption(f"Total rows: {len(st.session_state.df)}")
-
-# -------------------- 7. CACHED MODELS (for performance) --------------------
+# -------------------- 6. CACHED MODELS (for performance) --------------------
 @st.cache_resource
 def load_sentiment_pipeline():
     """Load sentiment analysis model from Hugging Face."""
@@ -187,7 +158,7 @@ def train_intent_classifier():
 sentiment_pipeline = load_sentiment_pipeline()
 vectorizer, intent_clf = train_intent_classifier()
 
-# -------------------- 8. HELPER FUNCTIONS --------------------
+# -------------------- 7. HELPER FUNCTIONS --------------------
 def predict_intent(text: str) -> str:
     """Fallback intent prediction using local ML model."""
     if not intent_clf or not vectorizer:
@@ -241,7 +212,7 @@ def generate_pdf(messages: List[Dict]) -> bytes:
         logger.error(f"PDF generation error: {e}")
         return b"Error generating PDF"
 
-# -------------------- 9. STREAMING GENERATORS (per provider) --------------------
+# -------------------- 8. STREAMING GENERATORS (per provider) --------------------
 def generate_ollama(messages: List[Dict]) -> Generator[str, None, None]:
     """Yields tokens from Ollama."""
     try:
@@ -304,7 +275,7 @@ def get_ai_response(messages: List[Dict]) -> Generator[str, None, None]:
             yield fallback_response(messages[-1]["content"] if messages else "")
         return fake_stream()
 
-# -------------------- 10. PAGE CONFIG & CUSTOM CSS --------------------
+# -------------------- 9. PAGE CONFIG & CUSTOM CSS --------------------
 st.set_page_config(
     page_title="AI Chatbot",
     page_icon="💬",
@@ -447,7 +418,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# -------------------- 11. MAIN CHAT UI --------------------
+# -------------------- 10. MAIN CHAT UI --------------------
 st.markdown('<div class="chat-container">', unsafe_allow_html=True)
 
 # Header
@@ -581,7 +552,7 @@ st.markdown('</div>', unsafe_allow_html=True)  # close chat-footer
 
 st.markdown('</div>', unsafe_allow_html=True)  # close chat-container
 
-# -------------------- 12. HANDLE FEEDBACK FROM QUERY PARAMETERS --------------------
+# -------------------- 11. HANDLE FEEDBACK FROM QUERY PARAMETERS --------------------
 query_params = st.query_params
 if "feedback" in query_params:
     try:
@@ -597,6 +568,6 @@ if "feedback" in query_params:
         logger.error(f"Feedback error: {e}")
         st.query_params.clear()
 
-# -------------------- 13. MAIN GUARD --------------------
+# -------------------- 12. MAIN GUARD --------------------
 if __name__ == "__main__":
     pass
