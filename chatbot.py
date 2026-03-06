@@ -13,7 +13,6 @@ A single‑file Streamlit application that integrates:
 - Sentiment analysis (Hugging Face transformers)
 - Intent classification fallback (scikit‑learn)
 - Like/dislike buttons on bot messages
-- Extensive logging and error handling
 
 All in one file – no external HTML/CSS needed.
 Run with: streamlit run chatbot.py
@@ -23,12 +22,8 @@ Run with: streamlit run chatbot.py
 import os
 import streamlit as st
 import time
-import json
 import hashlib
-import logging
-
 from datetime import datetime
-from io import BytesIO
 from typing import List, Dict, Generator, Tuple, Optional
 
 # -------------------- 1. SESSION STATE INITIALIZATION --------------------
@@ -43,11 +38,78 @@ if "stats" not in st.session_state:
 if "last_message_id" not in st.session_state:
     st.session_state.last_message_id = 0
 if "ai_provider" not in st.session_state:
-    st.session_state.ai_provider = os.getenv("AI_PROVIDER", "ollama").lower()
+    st.session_state.ai_provider = os.getenv("AI_PROVIDER", "openai").lower()
 if "ai_model" not in st.session_state:
-    st.session_state.ai_model = os.getenv("AI_MODEL", "llama3.2:3b").lower()
+    st.session_state.ai_model = os.getenv("AI_MODEL", "gpt-3.5-turbo").lower()
 
-# -------------------- 2. AI PROVIDER SETUP --------------------
+# -------------------- 2. CHECK DEPENDENCIES --------------------
+def check_dependencies():
+    """Check which dependencies are available"""
+    deps = {
+        'openai': False,
+        'groq': False,
+        'ollama': False,
+        'transformers': False,
+        'sklearn': False,
+        'fpdf': False,
+        'torch': False
+    }
+    
+    # Check OpenAI
+    try:
+        import openai
+        deps['openai'] = True
+    except ImportError:
+        pass
+    
+    # Check Groq
+    try:
+        import groq
+        deps['groq'] = True
+    except ImportError:
+        pass
+    
+    # Check Ollama
+    try:
+        import ollama
+        deps['ollama'] = True
+    except ImportError:
+        pass
+    
+    # Check transformers
+    try:
+        from transformers import pipeline
+        deps['transformers'] = True
+    except ImportError:
+        pass
+    
+    # Check sklearn
+    try:
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        from sklearn.naive_bayes import MultinomialNB
+        deps['sklearn'] = True
+    except ImportError:
+        pass
+    
+    # Check fpdf
+    try:
+        from fpdf import FPDF
+        deps['fpdf'] = True
+    except ImportError:
+        pass
+    
+    # Check torch
+    try:
+        import torch
+        deps['torch'] = True
+    except ImportError:
+        pass
+    
+    return deps
+
+deps_available = check_dependencies()
+
+# -------------------- 3. AI PROVIDER SETUP --------------------
 AI_PROVIDER = st.session_state.ai_provider
 AI_MODEL = st.session_state.ai_model
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -55,98 +117,70 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # Available models by provider
 AVAILABLE_MODELS = {
-    "ollama": ["llama3.2:3b", "llama3.1:8b", "phi3", "mistral", "llama2"],
-    "groq": ["llama-3.2-3b-preview", "mixtral-8x7b-32768", "llama2-70b-4096", "gemma-7b-it"],
-    "openai": ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview"]
+    "openai": ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview"],
+    "groq": ["mixtral-8x7b-32768", "llama2-70b-4096", "gemma-7b-it"],
+    "ollama": ["llama3.2:3b", "llama3.1:8b", "phi3", "mistral", "llama2"]
 }
 
-# Initialize clients based on provider
-if AI_PROVIDER == "ollama":
-    try:
-        import ollama
-        # Check if llama3.2:3b is available, pull if not
-        try:
-            ollama_client = ollama
-            # Optional: Check if model exists, you might want to pull it
-            # ollama_client.pull(AI_MODEL)
-        except Exception as e:
-            st.warning(f"Model {AI_MODEL} may not be available locally. Please pull it first: ollama pull {AI_MODEL}")
-    except ImportError:
-        st.error("Ollama not installed. Run: pip install ollama")
-        st.stop()
-elif AI_PROVIDER == "openai":
-    try:
-        import openai
-        if not OPENAI_API_KEY:
-            st.error("OPENAI_API_KEY environment variable not set.")
-            st.stop()
-        openai.api_key = OPENAI_API_KEY
-        openai_client = openai
-    except ImportError:
-        st.error("OpenAI not installed. Run: pip install openai")
-        st.stop()
-elif AI_PROVIDER == "groq":
-    try:
-        import groq
-        if not GROQ_API_KEY:
-            st.error("GROQ_API_KEY environment variable not set.")
-            st.stop()
-        groq_client = groq.Groq(api_key=GROQ_API_KEY)
-    except ImportError:
-        st.error("Groq not installed. Run: pip install groq")
-        st.stop()
-else:
-    st.error(f"Unknown AI_PROVIDER: {AI_PROVIDER}. Use 'ollama', 'openai', or 'groq'.")
+# Filter providers based on available dependencies
+AVAILABLE_PROVIDERS = []
+if deps_available['openai']:
+    AVAILABLE_PROVIDERS.append("openai")
+if deps_available['groq']:
+    AVAILABLE_PROVIDERS.append("groq")
+if deps_available['ollama']:
+    AVAILABLE_PROVIDERS.append("ollama")
+
+if not AVAILABLE_PROVIDERS:
+    st.error("No AI providers available. Please install at least one: openai, groq, or ollama")
     st.stop()
 
-# -------------------- 3. MACHINE LEARNING IMPORTS (FALLBACKS) --------------------
-try:
-    from transformers import pipeline
-    from sklearn.feature_extraction.text import TfidfVectorizer
-    from sklearn.naive_bayes import MultinomialNB
-    ML_AVAILABLE = True
-except ImportError:
-    st.warning("ML dependencies not available. Install with: pip install transformers scikit-learn")
-    ML_AVAILABLE = False
+# Initialize clients based on provider
+if AI_PROVIDER == "openai" and deps_available['openai']:
+    import openai
+    if not OPENAI_API_KEY:
+        st.warning("OPENAI_API_KEY not set. Using fallback responses.")
+        openai_client = None
+    else:
+        openai.api_key = OPENAI_API_KEY
+        openai_client = openai
+elif AI_PROVIDER == "groq" and deps_available['groq']:
+    import groq
+    if not GROQ_API_KEY:
+        st.warning("GROQ_API_KEY not set. Using fallback responses.")
+        groq_client = None
+    else:
+        groq_client = groq.Groq(api_key=GROQ_API_KEY)
+elif AI_PROVIDER == "ollama" and deps_available['ollama']:
+    import ollama
+    ollama_client = ollama
+else:
+    st.warning(f"Provider {AI_PROVIDER} not available. Switching to {AVAILABLE_PROVIDERS[0]}")
+    st.session_state.ai_provider = AVAILABLE_PROVIDERS[0]
+    st.rerun()
 
-# -------------------- 4. PDF EXPORT --------------------
-try:
-    from fpdf import FPDF
-    PDF_AVAILABLE = True
-except ImportError:
-    PDF_AVAILABLE = False
-    st.warning("FPDF not available. Install with: pip install fpdf")
-
-# -------------------- 5. LOGGING SETUP --------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('chatbot.log'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
-
-# -------------------- 6. CACHED MODELS (for performance) --------------------
+# -------------------- 4. ML MODELS (with fallbacks) --------------------
 @st.cache_resource
 def load_sentiment_pipeline():
-    """Load sentiment analysis model from Hugging Face."""
-    if not ML_AVAILABLE:
+    """Load sentiment analysis model if available."""
+    if not deps_available['transformers'] or not deps_available['torch']:
         return None
     try:
+        from transformers import pipeline
         return pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
-    except Exception as e:
-        logger.error(f"Sentiment pipeline error: {e}")
+    except Exception:
         return None
 
 @st.cache_resource
 def train_intent_classifier():
-    """Train a simple intent classifier on the fly."""
-    if not ML_AVAILABLE:
+    """Train intent classifier if sklearn is available."""
+    if not deps_available['sklearn']:
         return None, None
     
     try:
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        from sklearn.naive_bayes import MultinomialNB
+        
         intent_data = {
             'greeting': ['hello', 'hi', 'hey', 'good morning', 'good afternoon'],
             'goodbye': ['bye', 'goodbye', 'see you', 'talk to you later'],
@@ -164,16 +198,22 @@ def train_intent_classifier():
         clf = MultinomialNB()
         clf.fit(X, labels)
         return vectorizer, clf
-    except Exception as e:
-        logger.error(f"Intent classifier error: {e}")
+    except Exception:
         return None, None
 
-sentiment_pipeline = load_sentiment_pipeline()
-vectorizer, intent_clf = train_intent_classifier()
+sentiment_pipeline = load_sentiment_pipeline() if deps_available['transformers'] else None
+vectorizer, intent_clf = train_intent_classifier() if deps_available['sklearn'] else (None, None)
 
-# -------------------- 7. HELPER FUNCTIONS --------------------
+# -------------------- 5. PDF EXPORT --------------------
+if deps_available['fpdf']:
+    from fpdf import FPDF
+    PDF_AVAILABLE = True
+else:
+    PDF_AVAILABLE = False
+
+# -------------------- 6. HELPER FUNCTIONS --------------------
 def predict_intent(text: str) -> str:
-    """Fallback intent prediction using local ML model."""
+    """Fallback intent prediction."""
     if not intent_clf or not vectorizer:
         return "unknown"
     try:
@@ -193,7 +233,7 @@ def analyze_sentiment(text: str) -> Tuple[str, float]:
         return "NEUTRAL", 0.5
 
 def fallback_response(user_message: str) -> str:
-    """Generate a canned response based on intent (used when LLM fails)."""
+    """Generate a canned response."""
     intent = predict_intent(user_message)
     responses = {
         'greeting': "Hello! How can I assist you today?",
@@ -204,55 +244,33 @@ def fallback_response(user_message: str) -> str:
     }
     return responses.get(intent, "I'm not sure I understand. Could you rephrase?")
 
-def check_admin_password(password: str) -> bool:
-    """Simple password check (in production, use hashed env var)."""
-    return hashlib.sha256(password.encode()).hexdigest() == \
-           hashlib.sha256("admin123".encode()).hexdigest()
-
 def generate_pdf(messages: List[Dict]) -> bytes:
     """Generate PDF from conversation history."""
     if not PDF_AVAILABLE:
         return b"PDF export not available"
     try:
+        from fpdf import FPDF
         pdf = FPDF()
         pdf.add_page()
         pdf.set_font("Arial", size=12)
         for msg in messages:
-            role = "You" if msg["role"] == "user" else "ST"
+            role = "You" if msg["role"] == "user" else "AI"
             pdf.multi_cell(0, 10, f"{role}: {msg['content']}")
         return pdf.output(dest='S').encode('latin1')
-    except Exception as e:
-        logger.error(f"PDF generation error: {e}")
+    except Exception:
         return b"Error generating PDF"
 
-# -------------------- 8. STREAMING GENERATORS (per provider) --------------------
-def generate_ollama(messages: List[Dict]) -> Generator[str, None, None]:
-    """Yields tokens from Ollama with Llama 3.2:3b."""
-    try:
-        # Using Llama 3.2:3b model
-        stream = ollama.chat(
-            model=AI_MODEL,  # Using the selected model
-            messages=messages,
-            stream=True,
-            options={
-                "num_predict": 200,  # Slightly increased for Llama
-                "temperature": 0.3,
-                "top_p": 0.9,
-                "stop": ["</s>", "Human:", "Assistant:"]  # Llama-specific stop tokens
-            }
-        )
-        for chunk in stream:
-            if chunk and "message" in chunk and "content" in chunk["message"]:
-                yield chunk["message"]["content"]
-    except Exception as e:
-        logger.error(f"Ollama error with {AI_MODEL}: {e}")
-        yield f"[Error with {AI_MODEL}: {e}]"
-
+# -------------------- 7. STREAMING GENERATORS --------------------
 def generate_openai(messages: List[Dict]) -> Generator[str, None, None]:
     """Yields tokens from OpenAI."""
+    if not deps_available['openai'] or not OPENAI_API_KEY:
+        yield fallback_response(messages[-1]["content"] if messages else "")
+        return
+    
     try:
-        stream = openai_client.ChatCompletion.create(
-            model=AI_MODEL,  # Using the selected model
+        import openai
+        stream = openai.ChatCompletion.create(
+            model=AI_MODEL,
             messages=messages,
             temperature=0.3,
             max_tokens=200,
@@ -261,20 +279,20 @@ def generate_openai(messages: List[Dict]) -> Generator[str, None, None]:
         for chunk in stream:
             if chunk.choices[0].delta.get("content"):
                 yield chunk.choices[0].delta.content
-    except Exception as e:
-        logger.error(f"OpenAI error: {e}")
-        yield f"[Error: {e}]"
+    except Exception:
+        yield f"[Error: Unable to get response from OpenAI]"
 
 def generate_groq(messages: List[Dict]) -> Generator[str, None, None]:
-    """Yields tokens from GROQ with Llama 3.2 support."""
+    """Yields tokens from GROQ."""
+    if not deps_available['groq'] or not GROQ_API_KEY:
+        yield fallback_response(messages[-1]["content"] if messages else "")
+        return
+    
     try:
-        # For GROQ, map llama3.2:3b to the correct GROQ model name
-        groq_model = AI_MODEL
-        if AI_MODEL == "llama3.2:3b":
-            groq_model = "llama-3.2-3b-preview"
-        
+        import groq
+        groq_client = groq.Groq(api_key=GROQ_API_KEY)
         stream = groq_client.chat.completions.create(
-            model=groq_model,
+            model=AI_MODEL,
             messages=messages,
             temperature=0.3,
             max_tokens=200,
@@ -283,32 +301,54 @@ def generate_groq(messages: List[Dict]) -> Generator[str, None, None]:
         for chunk in stream:
             if chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
-    except Exception as e:
-        logger.error(f"GROQ error: {e}")
-        yield f"[Error: {e}]"
+    except Exception:
+        yield f"[Error: Unable to get response from GROQ]"
+
+def generate_ollama(messages: List[Dict]) -> Generator[str, None, None]:
+    """Yields tokens from Ollama."""
+    if not deps_available['ollama']:
+        yield fallback_response(messages[-1]["content"] if messages else "")
+        return
+    
+    try:
+        import ollama
+        stream = ollama.chat(
+            model=AI_MODEL,
+            messages=messages,
+            stream=True,
+            options={
+                "num_predict": 200,
+                "temperature": 0.3,
+                "top_p": 0.9
+            }
+        )
+        for chunk in stream:
+            if chunk and "message" in chunk and "content" in chunk["message"]:
+                yield chunk["message"]["content"]
+    except Exception:
+        yield f"[Error: Unable to get response from Ollama]"
 
 def get_ai_response(messages: List[Dict]) -> Generator[str, None, None]:
-    """Route to the appropriate generator based on AI_PROVIDER."""
-    if AI_PROVIDER == "ollama":
-        return generate_ollama(messages)
-    elif AI_PROVIDER == "openai":
+    """Route to the appropriate generator."""
+    if AI_PROVIDER == "openai":
         return generate_openai(messages)
     elif AI_PROVIDER == "groq":
         return generate_groq(messages)
+    elif AI_PROVIDER == "ollama":
+        return generate_ollama(messages)
     else:
         def fake_stream():
             yield fallback_response(messages[-1]["content"] if messages else "")
         return fake_stream()
 
-# -------------------- 9. PAGE CONFIG & CUSTOM CSS --------------------
+# -------------------- 8. PAGE CONFIG & UI --------------------
 st.set_page_config(
-    page_title="AI Chatbot with Llama 3.2",
-    page_icon="🦙",
-    layout="centered",
-    initial_sidebar_state="collapsed"
+    page_title="AI Chatbot",
+    page_icon="🤖",
+    layout="centered"
 )
 
-# Custom CSS - Removed Chatway references
+# Custom CSS
 st.markdown("""
 <style>
     .stApp {
@@ -384,15 +424,6 @@ st.markdown("""
         font-size: 12px;
         border-top: 1px solid #eee;
     }
-    .model-selector {
-        padding: 10px;
-        background: #f0f2f5;
-        border-radius: 5px;
-        margin: 10px 0;
-    }
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    .stDeployButton {display:none;}
     .stTextInput>div>div>input {
         border-radius: 20px;
         border: 1px solid #ccc;
@@ -416,60 +447,58 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# -------------------- 10. SIDEBAR FOR MODEL SELECTION --------------------
+# -------------------- 9. SIDEBAR --------------------
 with st.sidebar:
-    st.title("🦙 Model Configuration")
+    st.title("🤖 Configuration")
     
-    # Provider selection
-    provider = st.selectbox(
-        "Select AI Provider",
-        options=["ollama", "groq", "openai"],
-        index=["ollama", "groq", "openai"].index(st.session_state.ai_provider)
-    )
-    
-    if provider != st.session_state.ai_provider:
-        st.session_state.ai_provider = provider
-        st.rerun()
-    
-    # Model selection based on provider
-    available_models = AVAILABLE_MODELS.get(provider, [])
-    
-    # Set default model to llama3.2:3b if available
-    default_index = 0
-    if "llama3.2:3b" in available_models:
-        default_index = available_models.index("llama3.2:3b")
-    elif "llama-3.2-3b-preview" in available_models:
-        default_index = available_models.index("llama-3.2-3b-preview")
-    
-    model = st.selectbox(
-        "Select Model",
-        options=available_models,
-        index=default_index
-    )
-    
-    if model != st.session_state.ai_model:
-        st.session_state.ai_model = model
-        st.rerun()
+    # Provider selection (only show available providers)
+    if AVAILABLE_PROVIDERS:
+        provider = st.selectbox(
+            "Select AI Provider",
+            options=AVAILABLE_PROVIDERS,
+            index=AVAILABLE_PROVIDERS.index(st.session_state.ai_provider) if st.session_state.ai_provider in AVAILABLE_PROVIDERS else 0
+        )
+        
+        if provider != st.session_state.ai_provider:
+            st.session_state.ai_provider = provider
+            st.rerun()
+        
+        # Model selection
+        available_models = AVAILABLE_MODELS.get(provider, [])
+        if available_models:
+            model = st.selectbox(
+                "Select Model",
+                options=available_models,
+                index=0
+            )
+            
+            if model != st.session_state.ai_model:
+                st.session_state.ai_model = model
+                st.rerun()
     
     st.divider()
     
-    # Model info
-    if provider == "ollama" and model == "llama3.2:3b":
-        st.info("📌 Make sure you have pulled the model: `ollama pull llama3.2:3b`")
-    elif provider == "groq" and model == "llama-3.2-3b-preview":
-        st.info("📌 Using Llama 3.2 3B via GROQ API")
+    # API Key status
+    st.subheader("🔑 API Status")
+    if deps_available['openai']:
+        st.write(f"OpenAI: {'✅' if OPENAI_API_KEY else '❌ No API Key'}")
+    if deps_available['groq']:
+        st.write(f"GROQ: {'✅' if GROQ_API_KEY else '❌ No API Key'}")
+    if deps_available['ollama']:
+        st.write("Ollama: ✅ Available (local)")
+    
+    st.divider()
     
     # Stats
-    st.divider()
     st.subheader("📊 Stats")
     st.write(f"Messages: {st.session_state.stats['messages']}")
     st.write(f"Feedback: {st.session_state.stats['feedback_count']}")
 
-# -------------------- 11. MAIN CHAT UI --------------------
+# -------------------- 10. MAIN CHAT UI --------------------
 st.markdown('<div class="chat-container">', unsafe_allow_html=True)
 
-# Header with Llama 3.2 info
-model_display = "🦙 Llama 3.2 3B" if "llama" in AI_MODEL.lower() else AI_MODEL
+# Header
+model_display = AI_MODEL
 st.markdown(f"""
 <div class="chat-header">
     AI Chat Assistant
@@ -480,7 +509,6 @@ st.markdown(f"""
 # Messages area
 st.markdown('<div class="chat-messages">', unsafe_allow_html=True)
 
-# Display all messages with feedback buttons for bot messages
 for idx, msg in enumerate(st.session_state.messages):
     if msg["role"] == "assistant":
         msg_id = idx
@@ -492,9 +520,7 @@ for idx, msg in enumerate(st.session_state.messages):
         <div class="message bot">
             <div class="avatar">AI</div>
             <div class="bubble">{msg['content']}</div>
-            <div class="feedback-buttons" id="fb-{msg_id}">
-                <button onclick="sendFeedback({msg_id}, 1)">👍</button>
-                <button onclick="sendFeedback({msg_id}, -1)">👎</button>
+            <div class="feedback-buttons" style="display: inline-block; margin-left: 10px;">
                 <span>{fb_display}</span>
             </div>
         </div>
@@ -506,20 +532,7 @@ for idx, msg in enumerate(st.session_state.messages):
         </div>
         """, unsafe_allow_html=True)
 
-st.markdown('</div>', unsafe_allow_html=True)  # close chat-messages
-
-# JavaScript to handle feedback (via query parameters)
-st.markdown("""
-<script>
-function sendFeedback(msgId, rating) {
-    const url = new URL(window.location.href);
-    url.searchParams.set('feedback', '1');
-    url.searchParams.set('msg_id', msgId);
-    url.searchParams.set('rating', rating);
-    window.location.href = url.toString();
-}
-</script>
-""", unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)
 
 # Input form
 with st.form(key="chat_form", clear_on_submit=True):
@@ -529,11 +542,9 @@ with st.form(key="chat_form", clear_on_submit=True):
     with col2:
         send = st.form_submit_button("Send", use_container_width=True)
 
-# Process user input
 if send and user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
     st.session_state.stats["messages"] += 1
-    logger.info(f"User: {user_input}")
     st.rerun()
 
 # Streaming response
@@ -547,11 +558,10 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
     )
     full_response = ""
 
-    # Build context for AI
-    system_prompt = "You are a helpful AI assistant. Be concise, friendly, and keep responses under 150 tokens."
+    system_prompt = "You are a helpful AI assistant. Be concise and friendly."
     sentiment_label, sentiment_score = analyze_sentiment(last_user_message)
     if sentiment_label == "NEGATIVE" and sentiment_score > 0.8:
-        system_prompt += " The user seems upset. Respond with extra empathy and kindness."
+        system_prompt += " The user seems upset. Respond with extra empathy."
 
     messages_for_ai = [{"role": "system", "content": system_prompt}]
     for msg in st.session_state.messages[-10:]:
@@ -568,17 +578,8 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
             f'<div class="message bot"><div class="avatar">AI</div><div class="bubble">{full_response}</div></div>',
             unsafe_allow_html=True
         )
-    except Exception as e:
-        logger.error(f"Streaming error: {e}")
+    except Exception:
         full_response = fallback_response(last_user_message)
-        words = full_response.split()
-        for i, word in enumerate(words):
-            time.sleep(0.05)
-            current_text = " ".join(words[:i+1])
-            message_placeholder.markdown(
-                f'<div class="message bot"><div class="avatar">AI</div><div class="bubble">{current_text}▌</div></div>',
-                unsafe_allow_html=True
-            )
         message_placeholder.markdown(
             f'<div class="message bot"><div class="avatar">AI</div><div class="bubble">{full_response}</div></div>',
             unsafe_allow_html=True
@@ -586,20 +587,30 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
 
     st.session_state.messages.append({"role": "assistant", "content": full_response})
     st.session_state.stats["messages"] += 1
-    logger.info(f"Bot: {full_response}")
     st.rerun()
 
-# Footer - Simplified with only New Chat button
+# Footer
 st.markdown('<div class="chat-footer">', unsafe_allow_html=True)
-if st.button("🆕 New Chat", key="new_chat", use_container_width=True):
-    st.session_state.messages = [{"role": "assistant", "content": "Hi, how can I help you today?"}]
-    st.session_state.feedback = {}
-    st.rerun()
-st.markdown('</div>', unsafe_allow_html=True)  # close chat-footer
+col1, col2 = st.columns(2)
+with col1:
+    if st.button("🆕 New Chat", key="new_chat", use_container_width=True):
+        st.session_state.messages = [{"role": "assistant", "content": "Hi, how can I help you today?"}]
+        st.session_state.feedback = {}
+        st.rerun()
+with col2:
+    if PDF_AVAILABLE and st.button("📥 Export PDF", key="export_pdf", use_container_width=True):
+        pdf_bytes = generate_pdf(st.session_state.messages)
+        st.download_button(
+            label="Download PDF",
+            data=pdf_bytes,
+            file_name=f"chat_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+            mime="application/pdf",
+            key="download_pdf"
+        )
+st.markdown('</div>', unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)
 
-st.markdown('</div>', unsafe_allow_html=True)  # close chat-container
-
-# -------------------- 12. HANDLE FEEDBACK FROM QUERY PARAMETERS --------------------
+# -------------------- 11. HANDLE FEEDBACK FROM QUERY PARAMETERS --------------------
 query_params = st.query_params
 if "feedback" in query_params:
     try:
@@ -608,13 +619,11 @@ if "feedback" in query_params:
         if msg_id not in st.session_state.feedback:
             st.session_state.feedback[msg_id] = rating
             st.session_state.stats["feedback_count"] += 1
-            logger.info(f"Feedback: message {msg_id} rated {rating}")
         st.query_params.clear()
         st.rerun()
-    except Exception as e:
-        logger.error(f"Feedback error: {e}")
+    except Exception:
         st.query_params.clear()
 
-# -------------------- 13. MAIN GUARD --------------------
+# -------------------- 12. MAIN GUARD --------------------
 if __name__ == "__main__":
     pass

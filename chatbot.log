@@ -40,3 +40,11 @@
 2026-03-06 12:41:16,471 - INFO - User: hello
 2026-03-06 12:41:23,908 - INFO - HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
 2026-03-06 12:41:24,148 - INFO - Bot: Hello! I'm ST, your support agent. How can I assist you today?
+2026-03-06 12:46:11,035 - INFO - User: hello
+2026-03-06 12:46:12,125 - INFO - HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+2026-03-06 12:46:12,471 - INFO - Bot: How's your day going so far? Is there something I can help you with or would you like to chat?
+2026-03-06 12:53:03,854 - INFO - HTTP Request: HEAD https://huggingface.co/distilbert-base-uncased-finetuned-sst-2-english/resolve/main/config.json "HTTP/1.1 200 OK"
+2026-03-06 12:53:04,314 - INFO - HTTP Request: GET https://huggingface.co/api/models/distilbert-base-uncased-finetuned-sst-2-english/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 307 Temporary Redirect"
+2026-03-06 12:53:04,587 - INFO - HTTP Request: GET https://huggingface.co/api/models/distilbert/distilbert-base-uncased-finetuned-sst-2-english/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+2026-03-06 12:53:04,837 - INFO - HTTP Request: GET https://huggingface.co/api/models/distilbert-base-uncased-finetuned-sst-2-english/tree/main?recursive=true&expand=false "HTTP/1.1 307 Temporary Redirect"
+2026-03-06 12:53:05,125 - INFO - HTTP Request: GET https://huggingface.co/api/models/distilbert/distilbert-base-uncased-finetuned-sst-2-english/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
