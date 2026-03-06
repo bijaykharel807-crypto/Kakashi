@@ -21,3 +21,14 @@
 2026-03-06 10:28:24,886 - INFO - User: what is machine learning??
 2026-03-06 10:28:25,806 - INFO - HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
 2026-03-06 10:28:26,797 - INFO - Bot: Machine learning is a subset of AI that enables computers to learn from data and improve their performance over time without being explicitly programmed. It's used in various applications, from voice recognition to predictive analytics. If you're interested, I can guide you through some basic concepts or resources to get started.
+2026-03-06 12:00:01,501 - INFO - HTTP Request: HEAD https://huggingface.co/distilbert-base-uncased-finetuned-sst-2-english/resolve/main/config.json "HTTP/1.1 200 OK"
+2026-03-06 12:00:02,166 - INFO - HTTP Request: GET https://huggingface.co/api/models/distilbert-base-uncased-finetuned-sst-2-english/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 307 Temporary Redirect"
+2026-03-06 12:00:02,484 - INFO - HTTP Request: GET https://huggingface.co/api/models/distilbert/distilbert-base-uncased-finetuned-sst-2-english/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+2026-03-06 12:00:02,758 - INFO - HTTP Request: GET https://huggingface.co/api/models/distilbert-base-uncased-finetuned-sst-2-english/tree/main?recursive=true&expand=false "HTTP/1.1 307 Temporary Redirect"
+2026-03-06 12:00:03,009 - INFO - HTTP Request: GET https://huggingface.co/api/models/distilbert/distilbert-base-uncased-finetuned-sst-2-english/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+2026-03-06 12:00:18,085 - INFO - User: hello
+2026-03-06 12:00:24,244 - INFO - HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+2026-03-06 12:00:24,395 - INFO - Bot: Hello! How can I assist you today?
+2026-03-06 12:04:25,766 - INFO - User: hello
+2026-03-06 12:04:27,675 - INFO - HTTP Request: POST http://127.0.0.1:11434/api/chat "HTTP/1.1 200 OK"
+2026-03-06 12:04:27,829 - INFO - Bot: Hello! How can I assist you today?

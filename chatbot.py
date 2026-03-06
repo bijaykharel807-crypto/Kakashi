@@ -5,8 +5,7 @@
 ================================================================================
            ULTIMATE AI CHATBOT – Machine Learning, Deep Learning & LLMs
 ================================================================================
-A single‑file Streamlit application that replicates the exact UI from the
-screenshot and integrates:
+A single‑file Streamlit application that integrates:
 
 - Multiple LLM backends: Ollama (local), GROQ, OpenAI (streaming)
 - Conversation memory (last 10 messages)
@@ -16,7 +15,7 @@ screenshot and integrates:
 - Extensive logging and error handling
 
 All in one file – no external HTML/CSS needed.
-Run with: streamlit run app.py
+Run with: streamlit run chatbot.py
 ================================================================================
 """
 
@@ -26,50 +25,85 @@ import time
 import json
 import hashlib
 import logging
-import ollama
 
 from datetime import datetime
 from io import BytesIO
 from typing import List, Dict, Generator, Tuple, Optional
-from functools import wraps
 
-# -------------------- 1. AI PROVIDER SETUP --------------------
-# Read provider from environment (default: ollama)
-AI_PROVIDER = os.getenv("AI_PROVIDER", "ollama").lower()
+# -------------------- 1. SESSION STATE INITIALIZATION --------------------
+if "messages" not in st.session_state:
+    st.session_state.messages = [{"role": "assistant", "content": "Hi, how can we help?"}]
+if "feedback" not in st.session_state:
+    st.session_state.feedback = {}          # message_id -> rating (1 or -1)
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+if "stats" not in st.session_state:
+    st.session_state.stats = {"messages": 0, "users": 1, "feedback_count": 0}
+if "last_message_id" not in st.session_state:
+    st.session_state.last_message_id = 0
+if "ai_provider" not in st.session_state:
+    st.session_state.ai_provider = os.getenv("AI_PROVIDER", "ollama").lower()
+
+# -------------------- 2. AI PROVIDER SETUP --------------------
+AI_PROVIDER = st.session_state.ai_provider
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # Initialize clients based on provider
 if AI_PROVIDER == "ollama":
-    import ollama
-    MODEL = os.getenv("OLLAMA_MODEL", "phi3")
+    try:
+        import ollama
+        MODEL = os.getenv("OLLAMA_MODEL", "phi3")
+        ollama_client = ollama
+    except ImportError:
+        st.error("Ollama not installed. Run: pip install ollama")
+        st.stop()
 elif AI_PROVIDER == "openai":
-    import openai
-    if not OPENAI_API_KEY:
-        st.error("OPENAI_API_KEY environment variable not set.")
+    try:
+        import openai
+        if not OPENAI_API_KEY:
+            st.error("OPENAI_API_KEY environment variable not set.")
+            st.stop()
+        openai.api_key = OPENAI_API_KEY
+        MODEL = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
+        openai_client = openai
+    except ImportError:
+        st.error("OpenAI not installed. Run: pip install openai")
         st.stop()
-    openai.api_key = OPENAI_API_KEY
-    MODEL = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
 elif AI_PROVIDER == "groq":
-    import groq
-    if not GROQ_API_KEY:
-        st.error("GROQ_API_KEY environment variable not set.")
+    try:
+        import groq
+        if not GROQ_API_KEY:
+            st.error("GROQ_API_KEY environment variable not set.")
+            st.stop()
+        groq_client = groq.Groq(api_key=GROQ_API_KEY)
+        MODEL = os.getenv("GROQ_MODEL", "mixtral-8x7b-32768")
+    except ImportError:
+        st.error("Groq not installed. Run: pip install groq")
         st.stop()
-    client = groq.Groq(api_key=GROQ_API_KEY)
-    MODEL = os.getenv("GROQ_MODEL", "mixtral-8x7b-32768")
 else:
     st.error(f"Unknown AI_PROVIDER: {AI_PROVIDER}. Use 'ollama', 'openai', or 'groq'.")
     st.stop()
 
-# -------------------- 2. MACHINE LEARNING IMPORTS (FALLBACKS) --------------------
-from transformers import pipeline
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.naive_bayes import MultinomialNB
+# -------------------- 3. MACHINE LEARNING IMPORTS (FALLBACKS) --------------------
+try:
+    from transformers import pipeline
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.naive_bayes import MultinomialNB
+    ML_AVAILABLE = True
+except ImportError:
+    st.warning("ML dependencies not available. Install with: pip install transformers scikit-learn")
+    ML_AVAILABLE = False
 
-# -------------------- 3. PDF EXPORT --------------------
-from fpdf import FPDF
+# -------------------- 4. PDF EXPORT --------------------
+try:
+    from fpdf import FPDF
+    PDF_AVAILABLE = True
+except ImportError:
+    PDF_AVAILABLE = False
+    st.warning("FPDF not available. Install with: pip install fpdf")
 
-# -------------------- 4. LOGGING SETUP --------------------
+# -------------------- 5. LOGGING SETUP --------------------
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -80,46 +114,69 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# -------------------- 5. CACHED MODELS (for performance) --------------------
+# -------------------- 6. CACHED MODELS (for performance) --------------------
 @st.cache_resource
 def load_sentiment_pipeline():
     """Load sentiment analysis model from Hugging Face."""
-    return pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
+    if not ML_AVAILABLE:
+        return None
+    try:
+        return pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
+    except Exception as e:
+        logger.error(f"Sentiment pipeline error: {e}")
+        return None
 
 @st.cache_resource
 def train_intent_classifier():
     """Train a simple intent classifier on the fly."""
-    intent_data = {
-        'greeting': ['hello', 'hi', 'hey', 'good morning', 'good afternoon'],
-        'goodbye': ['bye', 'goodbye', 'see you', 'talk to you later'],
-        'hours': ['what are your hours', 'when are you open', 'business hours'],
-        'pricing': ['how much', 'pricing', 'cost', 'price', 'subscription'],
-        'support': ['help', 'support', 'issue', 'problem', 'contact']
-    }
-    patterns, labels = [], []
-    for intent, pats in intent_data.items():
-        for p in pats:
-            patterns.append(p.lower())
-            labels.append(intent)
-    vectorizer = TfidfVectorizer(ngram_range=(1, 2))
-    X = vectorizer.fit_transform(patterns)
-    clf = MultinomialNB()
-    clf.fit(X, labels)
-    return vectorizer, clf
+    if not ML_AVAILABLE:
+        return None, None
+    
+    try:
+        intent_data = {
+            'greeting': ['hello', 'hi', 'hey', 'good morning', 'good afternoon'],
+            'goodbye': ['bye', 'goodbye', 'see you', 'talk to you later'],
+            'hours': ['what are your hours', 'when are you open', 'business hours'],
+            'pricing': ['how much', 'pricing', 'cost', 'price', 'subscription'],
+            'support': ['help', 'support', 'issue', 'problem', 'contact']
+        }
+        patterns, labels = [], []
+        for intent, pats in intent_data.items():
+            for p in pats:
+                patterns.append(p.lower())
+                labels.append(intent)
+        vectorizer = TfidfVectorizer(ngram_range=(1, 2))
+        X = vectorizer.fit_transform(patterns)
+        clf = MultinomialNB()
+        clf.fit(X, labels)
+        return vectorizer, clf
+    except Exception as e:
+        logger.error(f"Intent classifier error: {e}")
+        return None, None
 
 sentiment_pipeline = load_sentiment_pipeline()
 vectorizer, intent_clf = train_intent_classifier()
 
-# -------------------- 6. HELPER FUNCTIONS --------------------
+# -------------------- 7. HELPER FUNCTIONS --------------------
 def predict_intent(text: str) -> str:
     """Fallback intent prediction using local ML model."""
-    X_test = vectorizer.transform([text.lower()])
-    return intent_clf.predict(X_test)[0]
+    if not intent_clf or not vectorizer:
+        return "unknown"
+    try:
+        X_test = vectorizer.transform([text.lower()])
+        return intent_clf.predict(X_test)[0]
+    except:
+        return "unknown"
 
 def analyze_sentiment(text: str) -> Tuple[str, float]:
     """Return sentiment label and confidence."""
-    result = sentiment_pipeline(text)[0]
-    return result['label'], result['score']
+    if not sentiment_pipeline:
+        return "NEUTRAL", 0.5
+    try:
+        result = sentiment_pipeline(text)[0]
+        return result['label'], result['score']
+    except:
+        return "NEUTRAL", 0.5
 
 def fallback_response(user_message: str) -> str:
     """Generate a canned response based on intent (used when LLM fails)."""
@@ -135,27 +192,31 @@ def fallback_response(user_message: str) -> str:
 
 def check_admin_password(password: str) -> bool:
     """Simple password check (in production, use hashed env var)."""
-    # Hardcoded admin123 – you should change this!
     return hashlib.sha256(password.encode()).hexdigest() == \
            hashlib.sha256("admin123".encode()).hexdigest()
 
 def generate_pdf(messages: List[Dict]) -> bytes:
     """Generate PDF from conversation history."""
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", size=12)
-    for msg in messages:
-        role = "You" if msg["role"] == "user" else "ST"
-        # Handle multi-line content
-        pdf.multi_cell(0, 10, f"{role}: {msg['content']}")
-    return pdf.output(dest='S').encode('latin1')
+    if not PDF_AVAILABLE:
+        return b"PDF export not available"
+    try:
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", size=12)
+        for msg in messages:
+            role = "You" if msg["role"] == "user" else "ST"
+            pdf.multi_cell(0, 10, f"{role}: {msg['content']}")
+        return pdf.output(dest='S').encode('latin1')
+    except Exception as e:
+        logger.error(f"PDF generation error: {e}")
+        return b"Error generating PDF"
 
-# -------------------- 7. STREAMING GENERATORS (per provider) --------------------
+# -------------------- 8. STREAMING GENERATORS (per provider) --------------------
 def generate_ollama(messages: List[Dict]) -> Generator[str, None, None]:
     """Yields tokens from Ollama."""
     try:
-        stream = ollama.chat(
-            model="phi3",
+        stream = ollama_client.chat(
+            model=MODEL,
             messages=messages,
             stream=True,
             options={"num_predict": 150, "temperature": 0.3}
@@ -169,7 +230,7 @@ def generate_ollama(messages: List[Dict]) -> Generator[str, None, None]:
 def generate_openai(messages: List[Dict]) -> Generator[str, None, None]:
     """Yields tokens from OpenAI."""
     try:
-        stream = openai.ChatCompletion.create(
+        stream = openai_client.ChatCompletion.create(
             model=MODEL,
             messages=messages,
             temperature=0.3,
@@ -186,7 +247,7 @@ def generate_openai(messages: List[Dict]) -> Generator[str, None, None]:
 def generate_groq(messages: List[Dict]) -> Generator[str, None, None]:
     """Yields tokens from GROQ."""
     try:
-        stream = client.chat.completions.create(
+        stream = groq_client.chat.completions.create(
             model=MODEL,
             messages=messages,
             temperature=0.3,
@@ -209,12 +270,11 @@ def get_ai_response(messages: List[Dict]) -> Generator[str, None, None]:
     elif AI_PROVIDER == "groq":
         return generate_groq(messages)
     else:
-        # Fallback to canned responses (should never happen)
         def fake_stream():
             yield fallback_response(messages[-1]["content"] if messages else "")
         return fake_stream()
 
-# -------------------- 8. PAGE CONFIG & CUSTOM CSS --------------------
+# -------------------- 9. PAGE CONFIG & CUSTOM CSS --------------------
 st.set_page_config(
     page_title="AI Chatbot",
     page_icon="💬",
@@ -225,11 +285,9 @@ st.set_page_config(
 # Custom CSS to match the screenshot exactly
 st.markdown("""
 <style>
-    /* Main app background */
     .stApp {
         background-color: #f0f2f5;
     }
-    /* Main chat container */
     .chat-container {
         max-width: 800px;
         margin: 0 auto;
@@ -238,7 +296,6 @@ st.markdown("""
         box-shadow: 0 5px 15px rgba(0,0,0,0.2);
         overflow: hidden;
     }
-    /* Header */
     .chat-header {
         background: #007bff;
         color: white;
@@ -247,20 +304,17 @@ st.markdown("""
         font-weight: bold;
         font-size: 18px;
     }
-    /* Provider badge inside header */
     .provider-badge {
         font-size: 10px;
         color: #e0e0e0;
         margin-top: 5px;
     }
-    /* Messages area */
     .chat-messages {
         height: 400px;
         overflow-y: auto;
         padding: 10px;
         background: #f9f9f9;
     }
-    /* Individual message */
     .message {
         display: flex;
         margin: 10px 0;
@@ -271,7 +325,6 @@ st.markdown("""
     .message.user {
         justify-content: flex-end;
     }
-    /* Avatar */
     .avatar {
         width: 30px;
         height: 30px;
@@ -285,7 +338,6 @@ st.markdown("""
         font-weight: bold;
         font-size: 14px;
     }
-    /* Message bubble */
     .bubble {
         padding: 8px 12px;
         border-radius: 18px;
@@ -300,7 +352,6 @@ st.markdown("""
         background: #007bff;
         color: white;
     }
-    /* Footer */
     .chat-footer {
         padding: 10px;
         text-align: center;
@@ -311,7 +362,6 @@ st.markdown("""
         color: #007bff;
         text-decoration: none;
     }
-    /* New chat button (styled as a link-like button) */
     .new-chat-btn {
         background: none;
         border: 1px solid #007bff;
@@ -326,7 +376,6 @@ st.markdown("""
         background: #007bff;
         color: white;
     }
-    /* Feedback buttons */
     .feedback-buttons {
         display: inline-block;
         margin-left: 10px;
@@ -342,11 +391,9 @@ st.markdown("""
     .feedback-buttons button:hover {
         opacity: 0.7;
     }
-    /* Hide Streamlit default elements */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     .stDeployButton {display:none;}
-    /* Input field and send button */
     .stTextInput>div>div>input {
         border-radius: 20px;
         border: 1px solid #ccc;
@@ -364,24 +411,11 @@ st.markdown("""
     .stButton>button:hover {
         background: #0056b3;
     }
-    /* Two‑column layout for input and button */
     div[data-testid="column"] {
         padding: 0 5px;
     }
 </style>
 """, unsafe_allow_html=True)
-
-# -------------------- 9. SESSION STATE INITIALIZATION --------------------
-if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "assistant", "content": "Hi, how can we help?"}]
-if "feedback" not in st.session_state:
-    st.session_state.feedback = {}          # message_id -> rating (1 or -1)
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
-if "stats" not in st.session_state:
-    st.session_state.stats = {"messages": 0, "users": 1, "feedback_count": 0}
-if "last_message_id" not in st.session_state:
-    st.session_state.last_message_id = 0
 
 # -------------------- 10. MAIN CHAT UI --------------------
 st.markdown('<div class="chat-container">', unsafe_allow_html=True)
@@ -400,14 +434,11 @@ st.markdown('<div class="chat-messages">', unsafe_allow_html=True)
 # Display all messages with feedback buttons for bot messages
 for idx, msg in enumerate(st.session_state.messages):
     if msg["role"] == "assistant":
-        # Use the list index as a simple message ID
         msg_id = idx
-        # Determine if feedback already given
         fb_display = ""
         if msg_id in st.session_state.feedback:
             fb = st.session_state.feedback[msg_id]
             fb_display = "👍" if fb == 1 else "👎"
-        # Use HTML for message and feedback buttons
         st.markdown(f"""
         <div class="message bot">
             <div class="avatar">ST</div>
@@ -432,7 +463,6 @@ st.markdown('</div>', unsafe_allow_html=True)  # close chat-messages
 st.markdown("""
 <script>
 function sendFeedback(msgId, rating) {
-    // Use query parameters to send feedback (Streamlit workaround)
     const url = new URL(window.location.href);
     url.searchParams.set('feedback', '1');
     url.searchParams.set('msg_id', msgId);
@@ -442,7 +472,7 @@ function sendFeedback(msgId, rating) {
 </script>
 """, unsafe_allow_html=True)
 
-# -------------------- INPUT FORM (clears automatically) --------------------
+# Input form
 with st.form(key="chat_form", clear_on_submit=True):
     col1, col2 = st.columns([5, 1])
     with col1:
@@ -452,20 +482,16 @@ with st.form(key="chat_form", clear_on_submit=True):
 
 # Process user input
 if send and user_input:
-    # Add user message
     st.session_state.messages.append({"role": "user", "content": user_input})
     st.session_state.stats["messages"] += 1
     logger.info(f"User: {user_input}")
     st.rerun()
 
-# ==================== STREAMING BLOCK (uses last user message from session) ====================
+# Streaming response
 if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
-    # Get the last user message from session state (safe even after form clear)
     last_user_message = st.session_state.messages[-1]["content"]
 
-    # Create a custom HTML placeholder for the streaming bot message
     message_placeholder = st.empty()
-    # Initial empty bubble
     message_placeholder.markdown(
         '<div class="message bot"><div class="avatar">ST</div><div class="bubble" id="streaming-bubble"></div></div>',
         unsafe_allow_html=True
@@ -485,12 +511,10 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
     try:
         for chunk in get_ai_response(messages_for_ai):
             full_response += chunk
-            # Update the bubble with current text + cursor
             message_placeholder.markdown(
                 f'<div class="message bot"><div class="avatar">ST</div><div class="bubble">{full_response}▌</div></div>',
                 unsafe_allow_html=True
             )
-        # Final message without cursor
         message_placeholder.markdown(
             f'<div class="message bot"><div class="avatar">ST</div><div class="bubble">{full_response}</div></div>',
             unsafe_allow_html=True
@@ -498,7 +522,6 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
     except Exception as e:
         logger.error(f"Streaming error: {e}")
         full_response = fallback_response(last_user_message)
-        # Simulate streaming word by word (optional)
         words = full_response.split()
         for i, word in enumerate(words):
             time.sleep(0.05)
@@ -512,12 +535,10 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
             unsafe_allow_html=True
         )
 
-    # Add assistant response to session
     st.session_state.messages.append({"role": "assistant", "content": full_response})
     st.session_state.stats["messages"] += 1
     logger.info(f"Bot: {full_response}")
     st.rerun()
-# ==================== END STREAMING BLOCK ====================
 
 # Footer
 st.markdown('<div class="chat-footer">', unsafe_allow_html=True)
@@ -540,7 +561,6 @@ if "feedback" in query_params:
             st.session_state.feedback[msg_id] = rating
             st.session_state.stats["feedback_count"] += 1
             logger.info(f"Feedback: message {msg_id} rated {rating}")
-        # Clear query params to avoid re-triggering
         st.query_params.clear()
         st.rerun()
     except Exception as e:
@@ -549,5 +569,4 @@ if "feedback" in query_params:
 
 # -------------------- 12. MAIN GUARD --------------------
 if __name__ == "__main__":
-    # Streamlit runs the script directly; no need for extra code.
     pass
