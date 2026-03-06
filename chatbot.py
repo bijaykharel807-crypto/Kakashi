@@ -8,6 +8,7 @@
 A single‑file Streamlit application that integrates:
 
 - Multiple LLM backends: Ollama (local), GROQ, OpenAI (streaming)
+- Llama 3.2:3b model support
 - Conversation memory (last 10 messages)
 - Sentiment analysis (Hugging Face transformers)
 - Intent classification fallback (scikit‑learn)
@@ -25,7 +26,6 @@ import time
 import json
 import hashlib
 import logging
-import ollama
 
 from datetime import datetime
 from io import BytesIO
@@ -44,18 +44,33 @@ if "last_message_id" not in st.session_state:
     st.session_state.last_message_id = 0
 if "ai_provider" not in st.session_state:
     st.session_state.ai_provider = os.getenv("AI_PROVIDER", "ollama").lower()
+if "ai_model" not in st.session_state:
+    st.session_state.ai_model = os.getenv("AI_MODEL", "llama3.2:3b").lower()
 
 # -------------------- 2. AI PROVIDER SETUP --------------------
 AI_PROVIDER = st.session_state.ai_provider
+AI_MODEL = st.session_state.ai_model
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+# Available models by provider
+AVAILABLE_MODELS = {
+    "ollama": ["llama3.2:3b", "llama3.1:8b", "phi3", "mistral", "llama2"],
+    "groq": ["llama-3.2-3b-preview", "mixtral-8x7b-32768", "llama2-70b-4096", "gemma-7b-it"],
+    "openai": ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview"]
+}
 
 # Initialize clients based on provider
 if AI_PROVIDER == "ollama":
     try:
         import ollama
-        MODEL = os.getenv("OLLAMA_MODEL", "phi3")
-        ollama_client = ollama
+        # Check if llama3.2:3b is available, pull if not
+        try:
+            ollama_client = ollama
+            # Optional: Check if model exists, you might want to pull it
+            # ollama_client.pull(AI_MODEL)
+        except Exception as e:
+            st.warning(f"Model {AI_MODEL} may not be available locally. Please pull it first: ollama pull {AI_MODEL}")
     except ImportError:
         st.error("Ollama not installed. Run: pip install ollama")
         st.stop()
@@ -66,7 +81,6 @@ elif AI_PROVIDER == "openai":
             st.error("OPENAI_API_KEY environment variable not set.")
             st.stop()
         openai.api_key = OPENAI_API_KEY
-        MODEL = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
         openai_client = openai
     except ImportError:
         st.error("OpenAI not installed. Run: pip install openai")
@@ -78,7 +92,6 @@ elif AI_PROVIDER == "groq":
             st.error("GROQ_API_KEY environment variable not set.")
             st.stop()
         groq_client = groq.Groq(api_key=GROQ_API_KEY)
-        MODEL = os.getenv("GROQ_MODEL", "mixtral-8x7b-32768")
     except ImportError:
         st.error("Groq not installed. Run: pip install groq")
         st.stop()
@@ -214,28 +227,35 @@ def generate_pdf(messages: List[Dict]) -> bytes:
 
 # -------------------- 8. STREAMING GENERATORS (per provider) --------------------
 def generate_ollama(messages: List[Dict]) -> Generator[str, None, None]:
-    """Yields tokens from Ollama."""
+    """Yields tokens from Ollama with Llama 3.2:3b."""
     try:
-        stream = ollama_client.chat(
-            model=MODEL,
+        # Using Llama 3.2:3b model
+        stream = ollama.chat(
+            model=AI_MODEL,  # Using the selected model
             messages=messages,
             stream=True,
-            options={"num_predict": 150, "temperature": 0.3}
+            options={
+                "num_predict": 200,  # Slightly increased for Llama
+                "temperature": 0.3,
+                "top_p": 0.9,
+                "stop": ["</s>", "Human:", "Assistant:"]  # Llama-specific stop tokens
+            }
         )
         for chunk in stream:
-            yield chunk["message"]["content"]
+            if chunk and "message" in chunk and "content" in chunk["message"]:
+                yield chunk["message"]["content"]
     except Exception as e:
-        logger.error(f"Ollama error: {e}")
-        yield f"[Error: {e}]"
+        logger.error(f"Ollama error with {AI_MODEL}: {e}")
+        yield f"[Error with {AI_MODEL}: {e}]"
 
 def generate_openai(messages: List[Dict]) -> Generator[str, None, None]:
     """Yields tokens from OpenAI."""
     try:
         stream = openai_client.ChatCompletion.create(
-            model=MODEL,
+            model=AI_MODEL,  # Using the selected model
             messages=messages,
             temperature=0.3,
-            max_tokens=150,
+            max_tokens=200,
             stream=True
         )
         for chunk in stream:
@@ -246,13 +266,18 @@ def generate_openai(messages: List[Dict]) -> Generator[str, None, None]:
         yield f"[Error: {e}]"
 
 def generate_groq(messages: List[Dict]) -> Generator[str, None, None]:
-    """Yields tokens from GROQ."""
+    """Yields tokens from GROQ with Llama 3.2 support."""
     try:
+        # For GROQ, map llama3.2:3b to the correct GROQ model name
+        groq_model = AI_MODEL
+        if AI_MODEL == "llama3.2:3b":
+            groq_model = "llama-3.2-3b-preview"
+        
         stream = groq_client.chat.completions.create(
-            model=MODEL,
+            model=groq_model,
             messages=messages,
             temperature=0.3,
-            max_tokens=150,
+            max_tokens=200,
             stream=True
         )
         for chunk in stream:
@@ -277,13 +302,13 @@ def get_ai_response(messages: List[Dict]) -> Generator[str, None, None]:
 
 # -------------------- 9. PAGE CONFIG & CUSTOM CSS --------------------
 st.set_page_config(
-    page_title="AI Chatbot",
-    page_icon="💬",
+    page_title="AI Chatbot with Llama 3.2",
+    page_icon="🦙",
     layout="centered",
     initial_sidebar_state="collapsed"
 )
 
-# Custom CSS to match the screenshot exactly
+# Custom CSS - Removed Chatway references
 st.markdown("""
 <style>
     .stApp {
@@ -359,38 +384,11 @@ st.markdown("""
         font-size: 12px;
         border-top: 1px solid #eee;
     }
-    .chat-footer a {
-        color: #007bff;
-        text-decoration: none;
-    }
-    .new-chat-btn {
-        background: none;
-        border: 1px solid #007bff;
-        color: #007bff;
-        border-radius: 20px;
-        padding: 5px 10px;
-        cursor: pointer;
-        margin-bottom: 5px;
-        font-size: 14px;
-    }
-    .new-chat-btn:hover {
-        background: #007bff;
-        color: white;
-    }
-    .feedback-buttons {
-        display: inline-block;
-        margin-left: 10px;
-    }
-    .feedback-buttons button {
-        background: none;
-        border: none;
-        cursor: pointer;
-        font-size: 16px;
-        margin: 0 2px;
-        padding: 0;
-    }
-    .feedback-buttons button:hover {
-        opacity: 0.7;
+    .model-selector {
+        padding: 10px;
+        background: #f0f2f5;
+        border-radius: 5px;
+        margin: 10px 0;
     }
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
@@ -418,14 +416,64 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# -------------------- 10. MAIN CHAT UI --------------------
+# -------------------- 10. SIDEBAR FOR MODEL SELECTION --------------------
+with st.sidebar:
+    st.title("🦙 Model Configuration")
+    
+    # Provider selection
+    provider = st.selectbox(
+        "Select AI Provider",
+        options=["ollama", "groq", "openai"],
+        index=["ollama", "groq", "openai"].index(st.session_state.ai_provider)
+    )
+    
+    if provider != st.session_state.ai_provider:
+        st.session_state.ai_provider = provider
+        st.rerun()
+    
+    # Model selection based on provider
+    available_models = AVAILABLE_MODELS.get(provider, [])
+    
+    # Set default model to llama3.2:3b if available
+    default_index = 0
+    if "llama3.2:3b" in available_models:
+        default_index = available_models.index("llama3.2:3b")
+    elif "llama-3.2-3b-preview" in available_models:
+        default_index = available_models.index("llama-3.2-3b-preview")
+    
+    model = st.selectbox(
+        "Select Model",
+        options=available_models,
+        index=default_index
+    )
+    
+    if model != st.session_state.ai_model:
+        st.session_state.ai_model = model
+        st.rerun()
+    
+    st.divider()
+    
+    # Model info
+    if provider == "ollama" and model == "llama3.2:3b":
+        st.info("📌 Make sure you have pulled the model: `ollama pull llama3.2:3b`")
+    elif provider == "groq" and model == "llama-3.2-3b-preview":
+        st.info("📌 Using Llama 3.2 3B via GROQ API")
+    
+    # Stats
+    st.divider()
+    st.subheader("📊 Stats")
+    st.write(f"Messages: {st.session_state.stats['messages']}")
+    st.write(f"Feedback: {st.session_state.stats['feedback_count']}")
+
+# -------------------- 11. MAIN CHAT UI --------------------
 st.markdown('<div class="chat-container">', unsafe_allow_html=True)
 
-# Header
+# Header with Llama 3.2 info
+model_display = "🦙 Llama 3.2 3B" if "llama" in AI_MODEL.lower() else AI_MODEL
 st.markdown(f"""
 <div class="chat-header">
-    Our team is here for you
-    <div class="provider-badge">Powered by {AI_PROVIDER.upper()} ({MODEL})</div>
+    AI Chat Assistant
+    <div class="provider-badge">Powered by {AI_PROVIDER.upper()} | {model_display}</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -442,7 +490,7 @@ for idx, msg in enumerate(st.session_state.messages):
             fb_display = "👍" if fb == 1 else "👎"
         st.markdown(f"""
         <div class="message bot">
-            <div class="avatar">ST</div>
+            <div class="avatar">AI</div>
             <div class="bubble">{msg['content']}</div>
             <div class="feedback-buttons" id="fb-{msg_id}">
                 <button onclick="sendFeedback({msg_id}, 1)">👍</button>
@@ -494,13 +542,13 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
 
     message_placeholder = st.empty()
     message_placeholder.markdown(
-        '<div class="message bot"><div class="avatar">ST</div><div class="bubble" id="streaming-bubble"></div></div>',
+        '<div class="message bot"><div class="avatar">AI</div><div class="bubble" id="streaming-bubble"></div></div>',
         unsafe_allow_html=True
     )
     full_response = ""
 
     # Build context for AI
-    system_prompt = "You are a helpful support agent named ST for a company. Be concise, friendly, and keep responses under 150 tokens."
+    system_prompt = "You are a helpful AI assistant. Be concise, friendly, and keep responses under 150 tokens."
     sentiment_label, sentiment_score = analyze_sentiment(last_user_message)
     if sentiment_label == "NEGATIVE" and sentiment_score > 0.8:
         system_prompt += " The user seems upset. Respond with extra empathy and kindness."
@@ -513,11 +561,11 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
         for chunk in get_ai_response(messages_for_ai):
             full_response += chunk
             message_placeholder.markdown(
-                f'<div class="message bot"><div class="avatar">ST</div><div class="bubble">{full_response}▌</div></div>',
+                f'<div class="message bot"><div class="avatar">AI</div><div class="bubble">{full_response}▌</div></div>',
                 unsafe_allow_html=True
             )
         message_placeholder.markdown(
-            f'<div class="message bot"><div class="avatar">ST</div><div class="bubble">{full_response}</div></div>',
+            f'<div class="message bot"><div class="avatar">AI</div><div class="bubble">{full_response}</div></div>',
             unsafe_allow_html=True
         )
     except Exception as e:
@@ -528,11 +576,11 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
             time.sleep(0.05)
             current_text = " ".join(words[:i+1])
             message_placeholder.markdown(
-                f'<div class="message bot"><div class="avatar">ST</div><div class="bubble">{current_text}▌</div></div>',
+                f'<div class="message bot"><div class="avatar">AI</div><div class="bubble">{current_text}▌</div></div>',
                 unsafe_allow_html=True
             )
         message_placeholder.markdown(
-            f'<div class="message bot"><div class="avatar">ST</div><div class="bubble">{full_response}</div></div>',
+            f'<div class="message bot"><div class="avatar">AI</div><div class="bubble">{full_response}</div></div>',
             unsafe_allow_html=True
         )
 
@@ -541,18 +589,17 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
     logger.info(f"Bot: {full_response}")
     st.rerun()
 
-# Footer
+# Footer - Simplified with only New Chat button
 st.markdown('<div class="chat-footer">', unsafe_allow_html=True)
-if st.button("Start a new chat", key="new_chat"):
-    st.session_state.messages = [{"role": "assistant", "content": "Hi, how can we help?"}]
+if st.button("🆕 New Chat", key="new_chat", use_container_width=True):
+    st.session_state.messages = [{"role": "assistant", "content": "Hi, how can I help you today?"}]
     st.session_state.feedback = {}
     st.rerun()
-st.markdown('Powered by <a href="https://chatway.com" target="_blank">Chatway</a>', unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)  # close chat-footer
 
 st.markdown('</div>', unsafe_allow_html=True)  # close chat-container
 
-# -------------------- 11. HANDLE FEEDBACK FROM QUERY PARAMETERS --------------------
+# -------------------- 12. HANDLE FEEDBACK FROM QUERY PARAMETERS --------------------
 query_params = st.query_params
 if "feedback" in query_params:
     try:
@@ -568,6 +615,6 @@ if "feedback" in query_params:
         logger.error(f"Feedback error: {e}")
         st.query_params.clear()
 
-# -------------------- 12. MAIN GUARD --------------------
+# -------------------- 13. MAIN GUARD --------------------
 if __name__ == "__main__":
     pass
