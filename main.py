@@ -29,7 +29,7 @@ import logging
 from datetime import datetime
 from io import BytesIO
 from typing import List, Dict, Generator, Tuple, Optional
-from fastapi import FastAPI
+
 
 # -------------------- 1. SESSION STATE INITIALIZATION --------------------
 if "messages" not in st.session_state:

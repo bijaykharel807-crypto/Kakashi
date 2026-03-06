@@ -1,0 +1,8 @@
+streamlit
+ollama
+openai==0.28.0        
+groq
+transformers
+scikit-learn
+fpdf  
+torch
