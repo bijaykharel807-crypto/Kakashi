@@ -1,0 +1,15 @@
+app = "kakashi-qteu7q"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 8501
+  force_https = true
+
+  [[http_service.checks]]
+    interval = "10s"
+    timeout = "2s"
+    method = "get"
+    path = "/_stcore/health"
