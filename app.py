@@ -107,22 +107,6 @@ st.markdown("""
         align-self: flex-start;
         border-bottom-left-radius: 5px;
     }
-    .message-time {
-        font-size: 0.7em;
-        opacity: 0.7;
-        margin-top: 5px;
-        text-align: right;
-    }
-
-    /* Footer */
-    .chat-footer {
-        text-align: center;
-        margin-top: 20px;
-        padding-top: 15px;
-        border-top: 1px solid #f0f0f0;
-        color: #999;
-        font-size: 0.8em;
-    }
 
     /* Input styling */
     .stTextInput > div > div > input {
@@ -188,8 +172,6 @@ st.markdown('<div class="main">', unsafe_allow_html=True)
 # Chat container
 st.markdown('<div class="chat-container">', unsafe_allow_html=True)
 
-# Header removed – no title or subtitle
-
 # Display welcome or chat history
 if len(st.session_state.messages) == 1:
     st.markdown("""
@@ -206,23 +188,16 @@ else:
     for msg in st.session_state.messages:
         if msg["role"] == "user":
             st.markdown(
-                f'<div class="user-message">{msg["content"]}<div class="message-time">You</div></div>',
+                f'<div class="user-message">{msg["content"]}</div>',
                 unsafe_allow_html=True
             )
         elif msg["role"] == "assistant":
             st.markdown(
-                f'<div class="assistant-message">{msg["content"]}<div class="message-time">Llama</div></div>',
+                f'<div class="assistant-message">{msg["content"]}</div>',
                 unsafe_allow_html=True
             )
 
 st.markdown('</div>', unsafe_allow_html=True)  # close chat-container
-
-# Footer
-st.markdown("""
-<div class="chat-footer">
-    Powered by Groq · Llama 3.3 70B
-</div>
-""", unsafe_allow_html=True)
 
 st.markdown('</div>', unsafe_allow_html=True)  # close main
 
