@@ -8,7 +8,7 @@ from openai import OpenAI
 st.set_page_config(page_title="Llama Chat", page_icon="🦙", layout="centered")
 
 # ------------------------------
-# Custom CSS for a modern look
+# Custom CSS (your original, untouched)
 # ------------------------------
 st.markdown("""
 <style>
@@ -140,7 +140,51 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ------------------------------
-# Load API keys
+# Sidebar – configuration
+# ------------------------------
+with st.sidebar:
+    st.header("⚙️ Settings")
+
+    # API provider selection
+    api_provider = st.radio(
+        "Choose API provider",
+        options=["Groq", "OpenAI"],
+        index=0,
+        help="Select which service to use for Llama-3.3-70B"
+    )
+
+    # Model names for each provider
+    MODEL_NAMES = {
+        "Groq": "llama-3.3-70b-versatile",
+        "OpenAI": "llama-3.3-70b"  # adjust if your OpenAI deployment uses a different name
+    }
+
+    # Allow custom model name (in case the default is wrong)
+    custom_model = st.text_input(
+        "Model name (optional)",
+        value=MODEL_NAMES[api_provider],
+        help="Override the default model name for the selected provider"
+    )
+    model = custom_model if custom_model else MODEL_NAMES[api_provider]
+
+    # Generation parameters
+    temperature = st.slider("Temperature", 0.0, 2.0, 0.7, 0.1)
+    max_tokens = st.number_input("Max tokens", min_value=1, max_value=4096, value=1024, step=1)
+
+    # System prompt
+    system_prompt = st.text_area(
+        "System prompt",
+        value="You are a helpful assistant.",
+        help="Instructions for the AI's behavior"
+    )
+
+    st.divider()
+    if st.button("🔄 Clear chat history"):
+        st.session_state.messages = [{"role": "system", "content": system_prompt}]
+        st.rerun()
+
+# ------------------------------
+# Load API keys from secrets
 # ------------------------------
 try:
     groq_client = Groq(api_key=st.secrets["GROQ_API_KEY"])
@@ -150,26 +194,15 @@ except Exception as e:
     st.stop()
 
 # ------------------------------
-# Fixed model and parameters
-# ------------------------------
-MODEL = "llama-3.3-70b-versatile"
-TEMPERATURE = 0.7
-MAX_TOKENS = 1024
-SYSTEM_PROMPT = "You are a helpful assistant."
-
-# ------------------------------
-# Session state
+# Session state initialization
 # ------------------------------
 if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    st.session_state.messages = [{"role": "system", "content": system_prompt}]
 
 # ------------------------------
-# UI Layout
+# Main UI
 # ------------------------------
-# Main container with gradient background
 st.markdown('<div class="main">', unsafe_allow_html=True)
-
-# Chat container
 st.markdown('<div class="chat-container">', unsafe_allow_html=True)
 
 # Display welcome or chat history
@@ -182,7 +215,7 @@ if len(st.session_state.messages) == 1:
     </div>
     """, unsafe_allow_html=True)
     if st.button("Start a new chat", key="welcome_start", help="Begin a conversation"):
-        st.session_state.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        st.session_state.messages = [{"role": "system", "content": system_prompt}]
         st.rerun()
 else:
     for msg in st.session_state.messages:
@@ -198,24 +231,36 @@ else:
             )
 
 st.markdown('</div>', unsafe_allow_html=True)  # close chat-container
-
 st.markdown('</div>', unsafe_allow_html=True)  # close main
 
 # ------------------------------
 # Chat input
 # ------------------------------
 if prompt := st.chat_input("Type your message here..."):
+    # Update system prompt if changed (important when clear or first message)
+    if st.session_state.messages[0]["content"] != system_prompt:
+        st.session_state.messages[0]["content"] = system_prompt
+
     st.session_state.messages.append({"role": "user", "content": prompt})
+
     with st.spinner("Thinking..."):
         try:
-            response = groq_client.chat.completions.create(
-                model=MODEL,
+            # Choose the appropriate client
+            if api_provider == "Groq":
+                client = groq_client
+            else:
+                client = openai_client
+
+            # Make the API call
+            response = client.chat.completions.create(
+                model=model,
                 messages=st.session_state.messages,
-                temperature=TEMPERATURE,
-                max_tokens=MAX_TOKENS
+                temperature=temperature,
+                max_tokens=max_tokens
             )
             reply = response.choices[0].message.content
             st.session_state.messages.append({"role": "assistant", "content": reply})
             st.rerun()
         except Exception as e:
             st.error(f"⚠️ Error: {e}")
+            # Remove the last user message? Optional; here we keep it so user can retry.
