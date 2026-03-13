@@ -1,266 +1,255 @@
+# app.py
 import streamlit as st
-from groq import Groq
-from openai import OpenAI
+import requests
+import os
+from datetime import datetime
 
-# ------------------------------
-# Page config
-# ------------------------------
-st.set_page_config(page_title="Llama Chat", page_icon="🦙", layout="centered")
+# ---------- PAGE CONFIG ----------
+st.set_page_config(page_title="HubBot", page_icon="🤖", layout="centered")
 
-# ------------------------------
-# Custom CSS (your original, untouched)
-# ------------------------------
+# ---------- GROQ API KEY (from environment or Streamlit secrets) ----------
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", st.secrets.get("GROQ_API_KEY", ""))
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+MODEL_NAME = "llama-3.3-70b-versatile"
+
+if not GROQ_API_KEY:
+    st.error(
+        "Groq API key not found. Please set it as an environment variable "
+        "`GROQ_API_KEY` or add it to `.streamlit/secrets.toml`."
+    )
+    st.stop()
+
+# ---------- CUSTOM CSS (exact look from the image) ----------
 st.markdown("""
 <style>
-    /* Import a nice font */
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
-
-    * {
-        font-family: 'Inter', sans-serif;
+    /* Overall background */
+    .stApp {
+        background-color: #f5f8fa;
     }
-
-    /* Main container */
-    .main {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 20px;
-        border-radius: 30px;
-        box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+    /* Chat message container */
+    .stChatMessage {
+        padding: 0 !important;
     }
-
-    /* Chat container */
-    .chat-container {
-        max-width: 800px;
-        margin: 0 auto;
-        background: white;
-        border-radius: 30px;
-        padding: 20px;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.1);
-    }
-
-    /* Welcome screen */
-    .welcome-container {
-        text-align: center;
-        padding: 40px 20px;
-        background: #f9f9f9;
-        border-radius: 20px;
-        margin: 20px 0;
-    }
-    .welcome-icon {
-        font-size: 60px;
-        margin-bottom: 20px;
-    }
-    .welcome-title {
-        font-size: 2em;
-        font-weight: 600;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin-bottom: 10px;
-    }
-    .welcome-subtitle {
-        font-size: 1.2em;
-        color: #666;
-        margin-bottom: 30px;
-    }
-    .start-chat-btn {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        border: none;
-        border-radius: 50px;
-        padding: 12px 40px;
-        font-size: 1.1em;
-        font-weight: 600;
-        cursor: pointer;
-        transition: transform 0.3s, box-shadow 0.3s;
-        box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
-    }
-    .start-chat-btn:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 15px 30px rgba(102, 126, 234, 0.4);
-    }
-
-    /* Message bubbles */
-    .user-message, .assistant-message {
-        padding: 15px 20px;
-        border-radius: 25px;
-        max-width: 70%;
-        word-wrap: break-word;
-        margin: 10px 0;
-        position: relative;
-        animation: fadeIn 0.3s ease;
-        box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-    }
-    @keyframes fadeIn {
-        from { opacity: 0; transform: translateY(10px); }
-        to { opacity: 1; transform: translateY(0); }
-    }
-    .user-message {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        align-self: flex-end;
+    /* User message bubble */
+    .stChatMessage[data-testid="chat-message-user"] div[data-testid="chat-message-content"] {
+        background-color: #0b2b4a !important;
+        color: white !important;
+        border-radius: 18px 18px 4px 18px !important;
+        padding: 12px 16px !important;
+        max-width: 80%;
         margin-left: auto;
-        border-bottom-right-radius: 5px;
     }
-    .assistant-message {
-        background: #f0f0f0;
-        color: #333;
-        align-self: flex-start;
-        border-bottom-left-radius: 5px;
+    /* Assistant message bubble */
+    .stChatMessage[data-testid="chat-message-assistant"] div[data-testid="chat-message-content"] {
+        background-color: #f1f3f5 !important;
+        color: #1e2a3a !important;
+        border-radius: 18px 18px 18px 4px !important;
+        padding: 12px 16px !important;
+        max-width: 80%;
     }
-
-    /* Input styling */
-    .stTextInput > div > div > input {
-        border-radius: 50px;
-        border: 2px solid #e0e0e0;
-        padding: 15px 20px;
-        font-size: 1em;
-        transition: border-color 0.3s;
+    /* Timestamp style */
+    .timestamp {
+        font-size: 11px;
+        color: #8a9aa8;
+        text-align: right;
+        margin-top: 6px;
     }
-    .stTextInput > div > div > input:focus {
-        border-color: #667eea;
-        box-shadow: none;
+    .user-timestamp {
+        color: #b0c4de;
     }
-    .stButton > button {
-        border-radius: 50px;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        border: none;
-        padding: 10px 25px;
-        font-weight: 600;
-        transition: transform 0.3s;
+    /* Options container – 4 buttons in a row */
+    .option-buttons {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 16px 0;
+        justify-content: center;
     }
-    .stButton > button:hover {
-        transform: scale(1.05);
+    /* Individual option button (Streamlit button override) */
+    div.stButton > button {
+        background: white !important;
+        border: 1px solid #ccd7e4 !important;
+        border-radius: 30px !important;
+        padding: 8px 16px !important;
+        font-size: 14px !important;
+        color: #1e2a3a !important;
+        font-weight: normal !important;
+        transition: all 0.2s !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        gap: 6px !important;
+        width: 100% !important;
+        justify-content: center !important;
     }
-
-    /* Hide Streamlit branding */
-    #MainMenu {visibility: hidden;}
+    div.stButton > button:hover {
+        background: #e9ecf0 !important;
+        border-color: #0b2b4a !important;
+    }
+    /* Disclaimer and AI warning */
+    .disclaimer {
+        font-size: 12px;
+        color: #5a6b7c;
+        margin: 16px 0 8px;
+        line-height: 1.4;
+        text-align: center;
+    }
+    .disclaimer a {
+        color: #0b2b4a;
+        text-decoration: none;
+    }
+    .ai-warning {
+        font-size: 12px;
+        color: #8a9aa8;
+        font-style: italic;
+        margin-bottom: 6px;
+        text-align: center;
+    }
+    /* Hide Streamlit footer */
     footer {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
-# ------------------------------
-# Sidebar – configuration
-# ------------------------------
-with st.sidebar:
-    st.header("⚙️ Settings")
-
-    # API provider selection
-    api_provider = st.radio(
-        "Choose API provider",
-        options=["Groq", "OpenAI"],
-        index=0,
-        help="Select which service to use for Llama-3.3-70B"
-    )
-
-    # Model names for each provider
-    MODEL_NAMES = {
-        "Groq": "llama-3.3-70b-versatile",
-        "OpenAI": "llama-3.3-70b"  # adjust if your OpenAI deployment uses a different name
-    }
-
-    # Allow custom model name (in case the default is wrong)
-    custom_model = st.text_input(
-        "Model name (optional)",
-        value=MODEL_NAMES[api_provider],
-        help="Override the default model name for the selected provider"
-    )
-    model = custom_model if custom_model else MODEL_NAMES[api_provider]
-
-    # Generation parameters
-    temperature = st.slider("Temperature", 0.0, 2.0, 0.7, 0.1)
-    max_tokens = st.number_input("Max tokens", min_value=1, max_value=4096, value=1024, step=1)
-
-    # System prompt
-    system_prompt = st.text_area(
-        "System prompt",
-        value="You are a helpful assistant.",
-        help="Instructions for the AI's behavior"
-    )
-
-    st.divider()
-    if st.button("🔄 Clear chat history"):
-        st.session_state.messages = [{"role": "system", "content": system_prompt}]
-        st.rerun()
-
-# ------------------------------
-# Load API keys from secrets
-# ------------------------------
-try:
-    groq_client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-    openai_client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-except Exception as e:
-    st.error(f"Missing API keys: {e}. Please add them to `.streamlit/secrets.toml`.")
-    st.stop()
-
-# ------------------------------
-# Session state initialization
-# ------------------------------
+# ---------- SESSION STATE INIT ----------
 if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "system", "content": system_prompt}]
+    # Initial bot message with timestamp (exactly as in screenshot)
+    st.session_state.messages = [
+        {
+            "role": "assistant",
+            "content": (
+                "Want to add a chatbot (like this one) to your website? I’m an AI bot that’s here to help! 😊\n\n"
+                "What would you like to do next?"
+            ),
+            "timestamp": datetime.now().strftime("%I:%M %p")
+        }
+    ]
+if "first_message_sent" not in st.session_state:
+    st.session_state.first_message_sent = False
 
-# ------------------------------
-# Main UI
-# ------------------------------
-st.markdown('<div class="main">', unsafe_allow_html=True)
-st.markdown('<div class="chat-container">', unsafe_allow_html=True)
+# ---------- HELPER FUNCTION TO CALL GROQ ----------
+def call_groq(prompt):
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": MODEL_NAME,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.7
+    }
+    try:
+        response = requests.post(GROQ_API_URL, json=payload, headers=headers)
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        return f"⚠️ Error: {str(e)}"
 
-# Display welcome or chat history
-if len(st.session_state.messages) == 1:
-    st.markdown("""
-    <div class="welcome-container">
-        <div class="welcome-icon">🦙✨</div>
-        <div class="welcome-title">Our team is here for you</div>
-        <div class="welcome-subtitle">Hi, how can we help?</div>
-    </div>
-    """, unsafe_allow_html=True)
-    if st.button("Start a new chat", key="welcome_start", help="Begin a conversation"):
-        st.session_state.messages = [{"role": "system", "content": system_prompt}]
-        st.rerun()
+# ---------- HEADER WITH LOGO (safe loading) ----------
+# Check if the logo file exists; if not, show a text header
+logo_path = "hubspot_logo.png"
+if os.path.exists(logo_path):
+    st.image(logo_path, width=150)
 else:
-    for msg in st.session_state.messages:
-        if msg["role"] == "user":
+    st.markdown("<h2 style='text-align: center; color:#0b2b4a;'>HubBot</h2>", unsafe_allow_html=True)
+
+# ---------- DISPLAY CHAT HISTORY ----------
+for msg in st.session_state.messages:
+    # Determine avatar
+    if msg["role"] == "assistant":
+        # Try to use custom bot avatar if it exists
+        bot_avatar_path = "bot_avatar.png"
+        if os.path.exists(bot_avatar_path):
+            avatar = bot_avatar_path
+        else:
+            avatar = "🤖"
+    else:
+        avatar = "👤"
+    
+    with st.chat_message(msg["role"], avatar=avatar):
+        st.markdown(msg["content"])
+        # Display timestamp if available
+        if "timestamp" in msg:
+            ts_class = "user-timestamp" if msg["role"] == "user" else ""
             st.markdown(
-                f'<div class="user-message">{msg["content"]}</div>',
+                f'<div class="timestamp {ts_class}">{msg["timestamp"]}</div>',
                 unsafe_allow_html=True
             )
-        elif msg["role"] == "assistant":
-            st.markdown(
-                f'<div class="assistant-message">{msg["content"]}</div>',
-                unsafe_allow_html=True
-            )
 
-st.markdown('</div>', unsafe_allow_html=True)  # close chat-container
-st.markdown('</div>', unsafe_allow_html=True)  # close main
-
-# ------------------------------
-# Chat input
-# ------------------------------
-if prompt := st.chat_input("Type your message here..."):
-    # Update system prompt if changed (important when clear or first message)
-    if st.session_state.messages[0]["content"] != system_prompt:
-        st.session_state.messages[0]["content"] = system_prompt
-
-    st.session_state.messages.append({"role": "user", "content": prompt})
-
-    with st.spinner("Thinking..."):
-        try:
-            # Choose the appropriate client
-            if api_provider == "Groq":
-                client = groq_client
-            else:
-                client = openai_client
-
-            # Make the API call
-            response = client.chat.completions.create(
-                model=model,
-                messages=st.session_state.messages,
-                temperature=temperature,
-                max_tokens=max_tokens
-            )
-            reply = response.choices[0].message.content
-            st.session_state.messages.append({"role": "assistant", "content": reply})
+# ---------- OPTIONS BUTTONS (only before first user message) ----------
+if not st.session_state.first_message_sent:
+    # Use columns to place four buttons in a row
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        if st.button("☐ Chat with sales", key="opt1", use_container_width=True):
+            st.session_state.first_message_sent = True
+            user_msg = "Chat with sales"
+            now = datetime.now().strftime("%I:%M %p")
+            st.session_state.messages.append({"role": "user", "content": user_msg, "timestamp": now})
+            # Get bot reply
+            reply = call_groq(user_msg)
+            st.session_state.messages.append({"role": "assistant", "content": reply, "timestamp": datetime.now().strftime("%I:%M %p")})
             st.rerun()
-        except Exception as e:
-            st.error(f"⚠️ Error: {e}")
-            # Remove the last user message? Optional; here we keep it so user can retry.
+    
+    with col2:
+        if st.button("🗹 Book a demo", key="opt2", use_container_width=True):
+            st.session_state.first_message_sent = True
+            user_msg = "Book a demo"
+            now = datetime.now().strftime("%I:%M %p")
+            st.session_state.messages.append({"role": "user", "content": user_msg, "timestamp": now})
+            reply = call_groq(user_msg)
+            st.session_state.messages.append({"role": "assistant", "content": reply, "timestamp": datetime.now().strftime("%I:%M %p")})
+            st.rerun()
+    
+    with col3:
+        if st.button("❌ Get started for free", key="opt3", use_container_width=True):
+            st.session_state.first_message_sent = True
+            user_msg = "Get started for free"
+            now = datetime.now().strftime("%I:%M %p")
+            st.session_state.messages.append({"role": "user", "content": user_msg, "timestamp": now})
+            reply = call_groq(user_msg)
+            st.session_state.messages.append({"role": "assistant", "content": reply, "timestamp": datetime.now().strftime("%I:%M %p")})
+            st.rerun()
+    
+    with col4:
+        if st.button("☐ Get help with my account", key="opt4", use_container_width=True):
+            st.session_state.first_message_sent = True
+            user_msg = "Get help with my account"
+            now = datetime.now().strftime("%I:%M %p")
+            st.session_state.messages.append({"role": "user", "content": user_msg, "timestamp": now})
+            reply = call_groq(user_msg)
+            st.session_state.messages.append({"role": "assistant", "content": reply, "timestamp": datetime.now().strftime("%I:%M %p")})
+            st.rerun()
+    
+    # Disclaimer and AI warning (exactly as in image)
+    st.markdown("""
+    <div class="disclaimer">
+        HubSpot uses the information you provide to us to contact you about our relevant content, products, and services. Check out our <a href="#">privacy policy</a> here.
+    </div>
+    <div class="ai-warning">AI-generated content may be inaccurate.</div>
+    """, unsafe_allow_html=True)
+
+# ---------- CHAT INPUT (free text) ----------
+if prompt := st.chat_input("Ask me anything..."):
+    # Mark that a message has been sent (hides options)
+    st.session_state.first_message_sent = True
+    now = datetime.now().strftime("%I:%M %p")
+    # Add user message
+    st.session_state.messages.append({"role": "user", "content": prompt, "timestamp": now})
+    # Show immediately (rerun will display it)
+    with st.chat_message("user", avatar="👤"):
+        st.markdown(prompt)
+        st.markdown(f'<div class="timestamp user-timestamp">{now}</div>', unsafe_allow_html=True)
+    
+    # Get bot response
+    bot_avatar = "bot_avatar.png" if os.path.exists("bot_avatar.png") else "🤖"
+    with st.chat_message("assistant", avatar=bot_avatar):
+        with st.spinner("Thinking..."):
+            reply = call_groq(prompt)
+        st.markdown(reply)
+        st.markdown(f'<div class="timestamp">{datetime.now().strftime("%I:%M %p")}</div>', unsafe_allow_html=True)
+    
+    # Store bot response
+    st.session_state.messages.append({"role": "assistant", "content": reply, "timestamp": datetime.now().strftime("%I:%M %p")})
+    
+    # Force a rerun to update the full chat history
+    st.rerun()
